@@ -1,9 +1,10 @@
 (ns locksmithing.queue-model-test
   (:require [clojure.pprint :refer [pprint]]
             [clojure.test :refer :all]
-            [knossos.core :refer [linearizations op ->Register]]
+            [knossos.core :refer [linearizations op inconsistent]]
             [locksmithing.queue :refer [queue]])
-  (:import [locksmithing.queue Node]
+  (:import [knossos.core Model]
+           [locksmithing.queue Node]
            [java.util.concurrent.atomic AtomicReference]))
 
 ;; Utils
@@ -23,6 +24,17 @@
   (update-in sys [:history] conj op))
 
 ;; Model
+(defrecord QueueRegister [queue]
+  Model
+  (step [this op]
+    (let [v (:value op)]
+      (condp = (:f op)
+        :push (QueueRegister. (vec (conj queue v)))
+        :pop  (if (= v (first queue))
+                (QueueRegister. (-> queue rest vec))
+                (inconsistent
+                  (str "pop expected " v " but read " (first queue))))))))
+
 (defn system
   "Our system contains an instance of locksmithing.queue.Queue and a history
   vector, formatted into a map."
@@ -60,7 +72,7 @@
                 :head  head
                 :head' (Node. v (AtomicReference. nil) head)})
         (assoc :push-transition queue-push-2)
-        (update (op :push :invoke :write v)))))
+        (update (op :push-thread :invoke :push v)))))
 
 (defn queue-push-2
   "Given a system, models the second phase of the push method. This involves
@@ -91,7 +103,7 @@
 
           (-> sys
               (assoc :push-transition @transition)
-              (update (op :push :info :queue-push-2 v))))
+              (update (op :push-thread :info :queue-push-2 v))))
 
       ;; 1b. in locksmithing.queue
       (do (when (.compareAndSet (-> sys :queue .head-ref) head head')
@@ -100,7 +112,7 @@
 
           (-> sys
               (assoc :push-transition @transition)
-              (update (op :push :info :queue-push-2 v))
+              (update (op :push-thread :info :queue-push-2 v))
               maybe-push-complete)))))
 
 (defn queue-push-3
@@ -127,7 +139,7 @@
 
         (-> sys
             (assoc :push-transition @transition)
-            (update (op :push :info :queue-push-3 v))
+            (update (op :push-thread :info :queue-push-3 v))
             maybe-push-complete))))
 
 (defn maybe-push-complete
@@ -151,7 +163,7 @@
   (let [v (-> sys :push-state :v)]
     (-> sys
       (dissoc :push-transition)  ;; Reset the push-transition fn
-      (update (op :push :ok :write v)))))
+      (update (op :push-thread :ok :push v)))))
 
 (defn queue-push
   "Given a system, nodels the push lock-free algorithm via a set of state
@@ -192,7 +204,7 @@
                              :head  head
                              :v     v})
           (assoc :pop-transition queue-pop-2)
-          (update (op :pop :invoke :read v))))
+          (update (op :pop-thread :invoke :pop v))))
     sys))
 
 (defn queue-pop-2
@@ -209,16 +221,16 @@
   (let [v          (-> sys :pop-state :v)
         head       (-> sys :pop-state :head)
         tail       (-> sys :pop-state :tail)
-        transition (atom (constantly (queue-pop-start sys)))]
+        transition (atom queue-pop-3)]
 
     ;; 1. in locksmithing.queue
     (when (identical? tail head)
-      (when (.compareAndSet (-> sys :queue .head-ref) head nil)
-        (reset! transition queue-pop-3)))
+      (when-not (.compareAndSet (-> sys :queue .head-ref) head nil)
+        (reset! transition (constantly (queue-pop-start sys)))))
 
     (-> sys
         (assoc :pop-transition @transition)
-        (update (op :pop :info :queue-pop-2 v)))))
+        (update (op :pop-thread :info :queue-pop-2 v)))))
 
 (defn queue-pop-3
   "Given a system, models the third phase of the pop method. This involves a
@@ -241,7 +253,7 @@
 
     (-> sys
         (assoc :pop-transition @transition)
-        (update (op :pop :info :queue-pop-3 v)))))
+        (update (op :pop-thread :info :queue-pop-3 v)))))
 
 (defn maybe-pop-complete
   "Given a system, conditionally sets the op completion in the system history
@@ -264,7 +276,7 @@
   (let [v (-> sys :pop-state :v)]
     (-> sys
       (dissoc :pop-transition)  ;; Reset the pop-transition fn
-      (update (op :pop :ok :read v)))))
+      (update (op :pop-thread :ok :pop v)))))
 
 (defn queue-pop
   "Given a system, nodels the pop lock-free algorithm via a set of state
@@ -279,20 +291,16 @@
 (defn step
   "All method results from a given system state."
   [sys]
-  (list (queue-push sys)
-        (queue-pop  sys)))
+  (list #(queue-push sys)
+        #(queue-pop  sys)))
 
 (defn trajectory
-  "Returns a system from a randomized trajectory, `depth` steps away from the
-  given system."
+  "Given a system and a depth, returns a randomized trajectory of the system up
+  to the given depth."
   [sys depth]
   (if (zero? depth)
     sys
-    (let [possibilities (step sys)]
-      (if (empty? possibilities)
-        sys
-        (recur (rand-nth possibilities)
-               (dec depth))))))
+    (recur ((rand-nth (step sys))) (dec depth))))
 
 (deftest queue-model-test
   (dothreads [_ 4]
@@ -300,6 +308,7 @@
       (let [sys (trajectory (system) 15)]
 
         ;; Is this system linearizable?
-        (let [history (:history sys)
-              linears (linearizations (->Register nil) history)]
+        (let [history  (:history sys)
+              register (QueueRegister. nil)
+              linears  (linearizations register history)]
           (is (not (empty? linears))))))))
