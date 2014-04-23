@@ -1,11 +1,12 @@
 (ns locksmithing.queue-model-test
   (:require [clojure.pprint :refer [pprint]]
-            [clojure.test :refer :all]
-            [knossos.core :refer [linearizations op inconsistent]]
+            [clojure.test :refer [deftest is]]
+            [knossos.core :refer [inconsistent linearizations op]]
+            [knossos.util :refer [update]]
             [locksmithing.queue :refer [queue]])
-  (:import [knossos.core Model]
-           [locksmithing.queue Node]
-           [java.util.concurrent.atomic AtomicReference]))
+  (:import [java.util.concurrent.atomic AtomicReference]
+           [knossos.core Model]
+           [locksmithing.queue Node]))
 
 ;; Utils
 (defmacro dothreads  ;; Stolen from knossos.core-test
@@ -18,15 +19,11 @@
         (map deref)
         dorun))
 
-(defn update
-  "Appends an operation to the history of a system."
-  [sys op]
-  (update-in sys [:history] conj op))
 
 ;; Model
 (defrecord QueueRegister [queue]
   Model
-  (step [this op]
+  (step [_ op]
     (let [v (:value op)]
       (condp = (:f op)
         :push (QueueRegister. (vec (conj queue v)))
@@ -40,6 +37,7 @@
   vector, formatted into a map."
   []
   {:queue   (queue)
+   :counter (atom 0)  ;; push value counter
    :history []})
 
 ;; Queue method "push" state transitions; points of linearization
@@ -49,8 +47,6 @@
 (declare queue-push-4)
 (declare queue-push-complete)
 (declare maybe-push-complete)
-
-(def push-state (atom 0))
 
 (defn queue-push-start
   "Given a system and optionally a value to push (otherwise grabs one from
@@ -64,7 +60,7 @@
 
   Returns the system map."
   [sys & [v]]
-  (let [v    (or v (swap! push-state inc))
+  (let [v    (or v (swap! (:counter sys) inc))
         head (-> sys :queue .head-ref .get)]
     (-> sys
         (assoc :push-state
@@ -94,7 +90,7 @@
   (let [v           (-> sys :push-state :v)
         head        (-> sys :push-state :head)
         head'       (-> sys :push-state :head')
-        transition  (atom (constantly (queue-push-start sys v)))]
+        transition  (atom #(queue-push-start % v))]
 
     (if head
       ;; 1a. in locksmithing.queue
@@ -131,7 +127,7 @@
   (let [v           (-> sys :push-state :v)
         head        (-> sys :push-state :head)
         head'       (-> sys :push-state :head')
-        transition  (atom (constantly (queue-push-start sys v)))]
+        transition  (atom #(queue-push-start % v))]
 
     ;; 2. in locksmithing.queue
     (do (when (.compareAndSet (-> sys :queue .head-ref) head head')
@@ -226,7 +222,7 @@
     ;; 1. in locksmithing.queue
     (when (identical? tail head)
       (when-not (.compareAndSet (-> sys :queue .head-ref) head nil)
-        (reset! transition (constantly (queue-pop-start sys)))))
+        (reset! transition queue-pop-start)))
 
     (-> sys
         (assoc :pop-transition @transition)
@@ -245,7 +241,7 @@
   (let [v          (-> sys :pop-state :v)
         tail       (-> sys :pop-state :tail)
         tail'      (-> sys :pop-state :tail')
-        transition (atom (constantly (queue-pop-start sys)))]
+        transition (atom queue-pop-start)]
 
     ;; 2. in locksmithing.queue
     (when (.compareAndSet (-> sys :queue .tail-ref) tail tail')
@@ -304,11 +300,12 @@
 
 (deftest queue-model-test
   (dothreads [_ 4]
-    (dotimes [_ 1e4]
-      (let [sys (trajectory (system) 15)]
+    (dotimes [_ 1e3]
+      (let [sys (trajectory (system) 50)]
 
         ;; Is this system linearizable?
         (let [history  (:history sys)
               register (QueueRegister. nil)
               linears  (linearizations register history)]
+
           (is (not (empty? linears))))))))
