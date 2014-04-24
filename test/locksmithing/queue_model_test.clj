@@ -188,6 +188,14 @@
 (declare queue-pop-complete)
 (declare maybe-pop-complete)
 
+(defn pop-state
+  [id]
+  (keyword (str "pop-state-" (name id))))
+
+(defn pop-transition
+  [id]
+  (keyword (str "pop-transition-" (name id))))
+
 (defn queue-pop-start
   "Given a system sets up the initial phase of the pop method. This involves
   first ensuring and acquiring a tail. Note that if no tail exists, there is
@@ -198,18 +206,18 @@
   Sets queue-pop-2 as the transition function.
 
   Returns the system map."
-  [sys]
+  [sys id]
   (if-let [tail (-> sys :queue .tail-ref .get)]  ;; Cannot pop without tail
     (let [tail' (-> tail .prev-ref .get)
           head  (-> sys :queue .head-ref .get)
           v     (.data tail)]
       (-> sys
-          (assoc :pop-state {:tail  tail
-                             :tail' tail'
-                             :head  head
-                             :v     v})
-          (assoc :pop-transition queue-pop-2)
-          (update (op :pop-thread :invoke :pop v))))
+          (assoc (pop-state id) {:tail  tail
+                                 :tail' tail'
+                                 :head  head
+                                 :v     v})
+          (assoc (pop-transition id) queue-pop-2)
+          (update (op (pop-state id) :invoke :pop v))))
     sys))
 
 (defn queue-pop-2
@@ -222,10 +230,11 @@
   Sets either queue-pop-start or queue-pop-3 as the transition function.
 
   Returns the system map."
-  [sys]
-  (let [v          (-> sys :pop-state :v)
-        head       (-> sys :pop-state :head)
-        tail       (-> sys :pop-state :tail)
+  [sys id]
+  (let [state-key  (pop-state id)
+        v          (-> sys state-key :v)
+        head       (-> sys state-key :head)
+        tail       (-> sys state-key :tail)
         transition (atom queue-pop-3)]
 
     ;; 1. in locksmithing.queue
@@ -234,8 +243,8 @@
         (reset! transition queue-pop-start)))
 
     (-> sys
-        (assoc :pop-transition @transition)
-        (update (op :pop-thread :info :queue-pop-2 v)))))
+        (assoc (pop-transition id) @transition)
+        (update (op state-key :info :queue-pop-2 v)))))
 
 (defn queue-pop-3
   "Given a system, models the third phase of the pop method. This involves a
@@ -246,10 +255,11 @@
   Sets either queue-pop-start or queue-pop-complete as the transition function.
 
   Returns the system map."
-  [sys]
-  (let [v          (-> sys :pop-state :v)
-        tail       (-> sys :pop-state :tail)
-        tail'      (-> sys :pop-state :tail')
+  [sys id]
+  (let [state-key  (pop-state id)
+        v          (-> sys state-key :v)
+        tail       (-> sys state-key :tail)
+        tail'      (-> sys state-key :tail')
         transition (atom queue-pop-start)]
 
     ;; 2. in locksmithing.queue
@@ -257,8 +267,9 @@
       (reset! transition queue-pop-complete))
 
     (-> sys
-        (assoc :pop-transition @transition)
-        (update (op :pop-thread :info :queue-pop-3 v)))))
+        (assoc (pop-transition id) @transition)
+        (update (op state-key :info :queue-pop-3 v))
+        (maybe-pop-complete id))))
 
 (defn maybe-pop-complete
   "Given a system, conditionally sets the op completion in the system history
@@ -267,55 +278,75 @@
   gap between a valid completion and further system states.
 
   Returns the system map."
-  [sys]
-  (let [transition (:pop-transition sys)]
+  [sys id]
+  (let [transition (get sys (pop-transition id))]
     (if (identical? transition queue-pop-complete)
-      (queue-pop-complete sys)
+      (queue-pop-complete sys id)
       sys)))
 
 (defn queue-pop-complete
   "Given a system, models a successful push.
 
   Returns the system map."
-  [sys]
-  (let [v (-> sys :pop-state :v)]
+  [sys id]
+  (let [state-key (pop-state id)
+        v         (-> sys state-key :v)]
     (-> sys
-      (dissoc :pop-transition)  ;; Reset the pop-transition fn
-      (update (op :pop-thread :ok :pop v)))))
+      (dissoc (pop-transition id))  ;; Reset the pop-transition fn
+      (update (op state-key :ok :pop v)))))
 
 (defn queue-pop
   "Given a system, nodels the pop lock-free algorithm via a set of state
   transitions.
 
   Returns the system map."
-  [sys]
-  (let [transition (or (:pop-transition sys) queue-pop-start)]
-    (transition sys)))
+  [sys id]
+  (let [transition  (get sys (pop-transition id))
+        transition' (or transition queue-pop-start)]
+    (transition' sys id)))
 
-(defn step
-  "All method results from a given system state."
+;; Operational models, e.g. concurrent push operations
+(defn concurrent-push-step
+  "System transitions related to applying concurrent push operations."
   [sys]
   (list #(queue-push sys :a)
         #(queue-push sys :b)
-        #(queue-pop  sys)))
+        #(queue-pop  sys :a)))
+
+(defn concurrent-pop-step
+  "System transitions related to applying concurrent pop operations."
+  [sys]
+  (list #(queue-push sys :a)
+        #(queue-pop  sys :a)
+        #(queue-pop  sys :b)))
 
 (defn trajectory
   "Given a system and a depth, returns a randomized trajectory of the system up
   to the given depth."
-  [sys depth]
+  [sys step depth]
   (if (zero? depth)
     sys
-    (recur ((rand-nth (step sys))) (dec depth))))
+    (recur ((rand-nth (step sys))) step (dec depth))))
 
-;; Test
-(deftest queue-model-test
+;; Tests
+(deftest concurrent-push-test
   (dothreads [_ 4]
-    (dotimes [_ 1e2]
-      (let [sys (trajectory (system) 25)]
+    (dotimes [_ 1e4]
+      (let [system  (trajectory (system) concurrent-push-step 30)
+            history (:history system)
+            model   (QueueModel. nil)
+            linears (linearizations model history)]
 
-        ;; Is this system linearizable?
-        (let [history  (:history sys)
-              model    (QueueModel. nil)
-              linears  (linearizations model history)]
+        ;; Is this history linearizable?
+        (is (not (empty? linears)))))))
 
-          (is (not (empty? linears))))))))
+(deftest concurrent-pop-test
+  (dothreads [_ 4]
+    (dotimes [_ 1e3]
+      (let [system  (trajectory (system) concurrent-pop-step 30)
+            history (:history system)
+            model   (QueueModel. nil)
+            linears (linearizations model history)]
+
+        ;; Is this history linearizable?
+        (is (not (empty? linears)))))))
