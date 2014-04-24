@@ -19,22 +19,21 @@
         (map deref)
         dorun))
 
-
 ;; Model
-(defrecord QueueRegister [queue]
+(defrecord QueueModel [queue]
   Model
   (step [_ op]
     (let [v (:value op)]
       (condp = (:f op)
-        :push (QueueRegister. (vec (conj queue v)))
+        :push (QueueModel. (-> queue (conj v) vec))
         :pop  (if (= v (first queue))
-                (QueueRegister. (-> queue rest vec))
+                (QueueModel. (-> queue rest vec))
                 (inconsistent
                   (str "pop expected " v " but read " (first queue))))))))
 
 (defn system
   "Our system contains an instance of locksmithing.queue.Queue and a history
-  vector, formatted into a map."
+  vector, formatted as a map."
   []
   {:queue   (queue)
    :counter (atom 0)  ;; push value counter
@@ -308,14 +307,15 @@
     sys
     (recur ((rand-nth (step sys))) (dec depth))))
 
+;; Test
 (deftest queue-model-test
   (dothreads [_ 4]
-    (dotimes [_ 1e3]
-      (let [sys (trajectory (system) 50)]
+    (dotimes [_ 1e2]
+      (let [sys (trajectory (system) 25)]
 
         ;; Is this system linearizable?
         (let [history  (:history sys)
-              register (QueueRegister. nil)
-              linears  (linearizations register history)]
+              model    (QueueModel. nil)
+              linears  (linearizations model history)]
 
           (is (not (empty? linears))))))))
