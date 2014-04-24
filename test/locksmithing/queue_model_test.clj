@@ -48,6 +48,14 @@
 (declare queue-push-complete)
 (declare maybe-push-complete)
 
+(defn push-state
+  [id]
+  (keyword (str "push-state-" (name id))))
+
+(defn push-transition
+  [id]
+  (keyword (str "push-transition-" (name id))))
+
 (defn queue-push-start
   "Given a system and optionally a value to push (otherwise grabs one from
   push-state), sets up the initial phase of the push method. This involves
@@ -59,16 +67,16 @@
   the system.
 
   Returns the system map."
-  [sys & [v]]
+  [sys id & [v]]
   (let [v    (or v (swap! (:counter sys) inc))
         head (-> sys :queue .head-ref .get)]
     (-> sys
-        (assoc :push-state
+        (assoc (push-state id)
                {:v     v
                 :head  head
                 :head' (Node. v (AtomicReference. nil) head)})
-        (assoc :push-transition queue-push-2)
-        (update (op :push-thread :invoke :push v)))))
+        (assoc (push-transition id) queue-push-2)
+        (update (op (push-state id) :invoke :push v)))))
 
 (defn queue-push-2
   "Given a system, models the second phase of the push method. This involves
@@ -86,11 +94,12 @@
   queue-push-complete.
 
   Returns the system map."
-  [sys]
-  (let [v           (-> sys :push-state :v)
-        head        (-> sys :push-state :head)
-        head'       (-> sys :push-state :head')
-        transition  (atom #(queue-push-start % v))]
+  [sys id]
+  (let [state-key   (push-state id)
+        v           (-> sys state-key :v)
+        head        (-> sys state-key :head)
+        head'       (-> sys state-key :head')
+        transition  (atom #(queue-push-start %1 %2 v))]
 
     (if head
       ;; 1a. in locksmithing.queue
@@ -98,8 +107,8 @@
             (reset! transition queue-push-3))
 
           (-> sys
-              (assoc :push-transition @transition)
-              (update (op :push-thread :info :queue-push-2 v))))
+              (assoc (push-transition id) @transition)
+              (update (op state-key :info :queue-push-2 v))))
 
       ;; 1b. in locksmithing.queue
       (do (when (.compareAndSet (-> sys :queue .head-ref) head head')
@@ -107,9 +116,9 @@
           (.set (-> sys :queue .tail-ref) head')
 
           (-> sys
-              (assoc :push-transition @transition)
-              (update (op :push-thread :info :queue-push-2 v))
-              maybe-push-complete)))))
+              (assoc (push-transition id) @transition)
+              (update (op state-key :info :queue-push-2 v))
+              (maybe-push-complete id))))))
 
 (defn queue-push-3
   "Given a system, models the third (optional) phase of the push method. This
@@ -123,20 +132,21 @@
   queue-push-complete.
 
   Returns the system map."
-  [sys]
-  (let [v           (-> sys :push-state :v)
-        head        (-> sys :push-state :head)
-        head'       (-> sys :push-state :head')
-        transition  (atom #(queue-push-start % v))]
+  [sys id]
+  (let [state-key   (push-state id)
+        v           (-> sys state-key :v)
+        head        (-> sys state-key :head)
+        head'       (-> sys state-key :head')
+        transition  (atom #(queue-push-start %1 %2 v))]
 
     ;; 2. in locksmithing.queue
     (do (when (.compareAndSet (-> sys :queue .head-ref) head head')
           (reset! transition queue-push-complete))
 
         (-> sys
-            (assoc :push-transition @transition)
-            (update (op :push-thread :info :queue-push-3 v))
-            maybe-push-complete))))
+            (assoc (push-transition id) @transition)
+            (update (op state-key :info :queue-push-3 v))
+            (maybe-push-complete id)))))
 
 (defn maybe-push-complete
   "Given a system, conditionally sets the op completion in the system history
@@ -145,31 +155,32 @@
   gap between a valid completion and further system states.
 
   Returns the system map."
-  [sys]
-  (let [transition (:push-transition sys)]
+  [sys id]
+  (let [transition (get sys (push-transition id))]
     (if (identical? transition queue-push-complete)
-      (queue-push-complete sys)
+      (queue-push-complete sys id)
       sys)))
 
 (defn queue-push-complete
   "Given a system, models a successful push.
 
   Returns the system map."
-  [sys]
-  (let [v (-> sys :push-state :v)]
+  [sys id]
+  (let [state-key (push-state id)
+        v         (-> sys state-key :v)]
     (-> sys
-      (dissoc :push-transition)  ;; Reset the push-transition fn
-      (update (op :push-thread :ok :push v)))))
+      (dissoc (push-transition id))  ;; Reset the push-transition fn
+      (update (op state-key :ok :push v)))))
 
 (defn queue-push
   "Given a system, nodels the push lock-free algorithm via a set of state
   transitions.
 
   Returns the system map."
-  [sys]
-  (let [transition (or (:push-transition sys) queue-push-start)]
-    (transition sys)))
-
+  [sys id]
+  (let [transition  (get sys (push-transition id))
+        transition' (or transition queue-push-start)]
+    (transition' sys id)))
 
 ;; Queue method "pop" state tranisitons; points of linearization
 (declare queue-pop-start)
@@ -177,7 +188,6 @@
 (declare queue-pop-3)
 (declare queue-pop-complete)
 (declare maybe-pop-complete)
-
 
 (defn queue-pop-start
   "Given a system sets up the initial phase of the pop method. This involves
@@ -283,11 +293,11 @@
   (let [transition (or (:pop-transition sys) queue-pop-start)]
     (transition sys)))
 
-
 (defn step
   "All method results from a given system state."
   [sys]
-  (list #(queue-push sys)
+  (list #(queue-push sys :a)
+        #(queue-push sys :b)
         #(queue-pop  sys)))
 
 (defn trajectory
