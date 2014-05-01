@@ -158,7 +158,7 @@
   (getHead [_] head)
   (getTail [_] tail))
 
-(defn- queue
+(defn queue
   "Constructs a new queue with the same empty node instance, wrapped in
   separate atoms, bound to head and tail.
   
