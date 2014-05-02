@@ -107,7 +107,7 @@
   (setValue [this v] (set! value v) this)
   (getNext [_] next))
 
-(defn- node
+(defn node
   "Given a value v and a successor s, constructs a new Node instance.
   
   Note that the successor is wrapped in an atom; this allows the successor to
@@ -118,14 +118,14 @@
   [v s]
   (Node. v (atom s)))
 
-(defn- get-next
+(defn get-next
   "Given an INode n, calls .getNext on it, returning the result."
   [^INode n]
   {:pre  [(instance? Node n)]
    :post [(instance? clojure.lang.Atom %)]}
   (.getNext n))
 
-(defn- get-value
+(defn get-value
   "Given an INode n, calls .getValue on it, returning the result."
   [^INode n]
   {:pre  [(instance? Node n)]}
@@ -139,7 +139,7 @@
    :post [(instance? Node %)]}
   (.setValue n x))
 
-(defn- set-value
+(defn set-value
   "Given an atom a containing a Node instance and a value v, swaps v into a
   using set-value*, returns the result of calling swap!."
   [^clojure.lang.Atom a v]
@@ -171,21 +171,21 @@
   (let [n (node nil nil)]
     (Queue. (atom n) (atom n))))
 
-(defn- get-head
+(defn get-head
   "Given an IQueue q, calls .getHead on q. Returns the result, an atom."
   [^IQueue q]
   {:pre  [(instance? Queue q)]
    :post [(instance? clojure.lang.Atom %)]}
   (.getHead q))
 
-(defn- get-tail
+(defn get-tail
   "Given an IQueue q, calls .getTail on q. Returns the result, an atom."
   [^IQueue q]
   {:pre  [(instance? Queue q)]
    :post [(instance? clojure.lang.Atom %)]}
   (.getTail q))
 
-(defn- cas-next
+(defn cas-next
   "Given an atom a, and INode cmp, and an INode v, calls compare-and-set! over
   the value of calling get-next on deref'd a, cmp, and v. Returns true or
   false."
@@ -195,7 +195,7 @@
          (instance? Node v)]}
   (compare-and-set! (get-next @a) cmp v))
 
-(defn- cas-head
+(defn cas-head
   "Given an IQueue q, an INode cmp, and an INode v, calls compare-and-set! over
   the value of calling get-head on q, cmp, and v. Returns true or false."
   [^IQueue q ^INode cmp ^INode v]
@@ -204,7 +204,7 @@
          (instance? Node v)]}
   (compare-and-set! (get-head q) cmp v))
 
-(defn- cas-tail
+(defn cas-tail
   "Given an IQueue q, an INode cmp, and an INode v, calls compare-and-set! over
   the value of calling get-tail on q, cmp, and v. Returns true or false."
   [^IQueue q ^INode cmp ^INode v]
@@ -246,8 +246,8 @@
           nil
           (do (cas-tail q t f') recur->))
         (if (cas-head q h' f')
-          (let [v (get-value f')]
-            (if-not (nil? v)
-              (do (set-value f nil) v)
-              recur->))))
+          (if-let [v (get-value f')]
+            (do (set-value f nil) v)
+            recur->)
+          recur->))
       recur->)))
