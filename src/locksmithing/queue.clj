@@ -3,23 +3,23 @@
   
   This is a Clojure implementation of the Michael-Scott lock-free queue. It is
   meant for demonstration purposes only and should not be used for anything
-  but experimenetation. In particular, it is part of an effort to demonstrate
+  but experimentation. In particular, it is part of an effort to demonstrate
   validating linearizability of concurrent data structures using Knossos.
   
   This implementation is necessarily mutable!
   
   How does it work?
   
-  This implementation follows closely the algorithm described in the paper
+  Our implementation follows closely the algorithm described in the paper
   'Simple, Fast, and Practical Non-Blocking and Blocking Concurrent Queue
   Algorithms'. It is a singly-linked list, with a 'dummy' head node, to ensure
-  empty queues behave properly. Compare-And-Set (CAS) is used to ensure
+  empty queues behave properly. Compare-And-Set (CAS) is used to for lockless,
   correct concurrent semantics.
   
   Initially both the head and the tail point to the same node. Nodes are then
   appended to the tail's next pointer as they are pushed onto the queue. The
   tail is continually swapped for the incoming node, such that a valid push is
-  conditional upon the tail's next pointing to nil; when a non-nil value is
+  conditional upon the tail's next pointer being nil; when a non-nil value is
   found, an attempt is made to move the tail to its next pointer.
   
   Values are removed from the queue by looking at the head's next node
@@ -29,16 +29,16 @@
   
   The push algorithm
   
-  First a new node is constructed with contains the value we are to add to the
-  queue. After this we enter loop wherein we bind the current tail and its
-  next pointer to local vars. We then immediately make a consistency check,
-  asking if the value we believe is tail is still the tail in the queue. If
-  not, we recur.
+  First a new node is constructed which contains the value we are to add to the
+  queue. After this we enter a loop wherein we bind the current tail and its
+  next pointer to local vars. We immediately make a consistency check, asking
+  if the value we believe is tail is still the tail in the queue. If not, we
+  recur.
   
   We then ask if the tail's next pointer we bound is nil. If it is, this means
   we are at the end of the tail; exactly where we want to be for new
   insertions. However if not, we will try to replace the tail in the queue
-  with the bound next pointer we have, in effect setting us up to try again.
+  with the next pointer we have, in effect setting us up to try again.
   
   Returning to the truthy case of the above, we try to set the tail pointer to
   our new node. If we succeed, this is the break point of the loop. The falsey
@@ -57,8 +57,8 @@
   return nil. Otherwise the tail has fallen behind, and we make an attempt to
   advance it and then recur.
   
-  Now if the bound head and the tail are not the same thing, then we may have
-  a value we can return. First we must try to read this value and bind it
+  Now if the bound head and the tail are not the same, then we may have a
+  value we can return. First we must try to read this value and bind it
   locally to ensure that it is not overwritten by a concurrent pop. If this
   value is not nil then we have a value to return and will do so, setting the
   node containing it to a nil value and exiting the loop. Otherwise it is a
@@ -67,9 +67,9 @@
   (:refer-clojure :exclude [pop!]))
 
 ;; Utils
-(def recur->)
+(def ^{:private true :const true} recur->)
 
-(defmacro loop-with-sleep
+(defmacro ^:private loop-with-sleep
   "Similar in principle to loop, but looks for a special recur-> symbol. Where
   found, this is replaced with a let over the bindings, a sleep over a small
   random amount of time and a recur.
@@ -81,8 +81,8 @@
   symbols that were passed to loop. The implication here is that the bindings
   will in some way mutate!"
   [bindings & body]
-  {:pre [(and (vector? bindings)
-              (even? (count bindings)))]}
+  {:pre [(vector? bindings)
+         (even? (count bindings))]}
   `(loop ~bindings
      ~@(walk/postwalk
          (fn find-recur-> [x#]
