@@ -114,32 +114,11 @@
       (if (nil? s)
         (when (q/cas-next t s n)
           (reset! transition queue-push-complete))
-        (reset! transition queue-push-3)))
+        (q/cas-tail (:queue sys) t' s)))
 
     (-> sys
         (assoc (push-transition id) @transition)
         (update (op state-key :info :queue-push-2 (q/get-value n))))))
-
-(defn queue-push-3
-  "Given a system map sys and an id, models a linearizability point of
-  locksmithing.queue/push!.
-  
-  This is the resulting branch of a cas-next failure. Here cas-tail is invoked
-  using the stored state, over t' and s.
-  
-  The transition is always set to queue-push-start.
-  
-  Returns a system map."
-  [sys id]
-  (let [state-key   (push-state id)
-        n           (-> sys state-key :n)
-        t'          (-> sys state-key :t')
-        s           (-> sys state-key :s)
-        transition  (atom #(queue-push-start %1 %2 n))]
-
-    (q/cas-tail (:queue sys) t' s)
-
-    (update sys (op state-key :info :queue-push-3 (q/get-value n)))))
 
 (defn queue-push-complete
   "Given a system map sys and an id, completes a push with the current stored
@@ -327,10 +306,11 @@
 (defn trajectory
   "Given a system and a depth, returns a randomized trajectory of the system up
   to the given depth."
-  [sys step depth]
+  [sys step-gen depth]
   (if (zero? depth)
     sys
-    (recur ((rand-nth (step sys))) step (dec depth))))
+    (let [new-sys-fn (rand-nth (step-gen sys))]
+      (recur (new-sys-fn sys) step-gen (dec depth)))))
 
 ;; Tests
 (deftest concurrent-push-test
