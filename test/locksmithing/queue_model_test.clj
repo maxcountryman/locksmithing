@@ -310,7 +310,7 @@
   (if (zero? depth)
     sys
     (let [new-sys-fn (rand-nth (step-gen sys))]
-      (recur (new-sys-fn sys) step-gen (dec depth)))))
+      (recur (new-sys-fn) step-gen (dec depth)))))
 
 ;; Tests
 (deftest concurrent-push-test
